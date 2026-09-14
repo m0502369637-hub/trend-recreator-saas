@@ -11,7 +11,7 @@
 // The workflow file is NOT part of the repo (COMFY_WORKFLOW is an env var in
 // production); pass it on disk here for the test only.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
 const opt = (name) => {
@@ -86,7 +86,7 @@ async function main() {
       if (!dl.ok) throw new Error(`view failed: HTTP ${dl.status}`);
       const buf = Buffer.from(await dl.arrayBuffer());
       const outPath = `/home/ubuntu/idea/saas/motion-inputs/result/test-flow-${file.filename}`;
-      require("node:fs").writeFileSync(outPath, buf);
+      writeFileSync(outPath, buf);
       console.log(`✅ output saved: ${outPath} (${buf.length} bytes)`);
     }
     return;
