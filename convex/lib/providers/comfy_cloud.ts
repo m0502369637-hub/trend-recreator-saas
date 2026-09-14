@@ -72,8 +72,9 @@ export const comfyCloudProvider: Provider = {
     }
 
     // 1. The reel video → bytes → input storage. Instagram PAGE urls need a
-    //    resolver (COMFY_REEL_RESOLVER template, "{url}" placeholder) because
-    //    instagram.com blocks server fetches; direct .mp4/CDN links work as-is.
+    //    resolver (COMFY_REEL_RESOLVER template, "{url}" placeholder): either
+    //    a downloader API that answers with JSON ({ "video_url": … }) or a
+    //    self-hosted yt-dlp worker (see resolver/) that answers the same way.
     let videoName = "";
     if (payload.reelUrl) {
       const resolver = env.COMFY_REEL_RESOLVER;
@@ -81,15 +82,44 @@ export const comfyCloudProvider: Provider = {
         payload.reelUrl.includes("instagram.com") && resolver
           ? resolver.replace("{url}", encodeURIComponent(payload.reelUrl))
           : payload.reelUrl;
-      const res = await fetch(target, {
+
+      let res = await fetch(target, {
         headers: { "User-Agent": "Mozilla/5.0 (compatible; trend-recreator/1.0)" },
       });
-      if (!res.ok || !(res.headers.get("content-type") ?? "").includes("video")) {
+      if (!res.ok) throw new Error(`reel resolver failed: HTTP ${res.status}`);
+
+      let videoUrl: string | null = null;
+      const contentType = (res.headers.get("content-type") ?? "").toLowerCase();
+      if (contentType.includes("video")) {
+        videoUrl = target; // the resolver answered with the media itself
+      } else {
+        // JSON resolver answers — the common downloader-API shape.
+        try {
+          const json = (await res.json()) as Record<string, any>;
+          videoUrl =
+            typeof json?.video_url === "string"
+              ? json.video_url
+              : typeof json?.url === "string"
+                ? json.url
+                : typeof json?.results?.[0]?.video_url === "string"
+                  ? json.results[0].video_url
+                  : null;
+        } catch {
+          /* not json */
+        }
+      }
+      if (!videoUrl) {
         throw new Error(
-          "could not download the reel video from that URL — Instagram page links need COMFY_REEL_RESOLVER (a reel-downloader API) or a direct .mp4 link",
+          "could not resolve the reel to a video — Instagram page links need COMFY_REEL_RESOLVER (a downloader API or the self-hosted resolver/)",
         );
       }
-      const bytes = new Uint8Array(await res.arrayBuffer());
+      const videoRes = await fetch(videoUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; trend-recreator/1.0)" },
+      });
+      if (!videoRes.ok || !(videoRes.headers.get("content-type") ?? "").includes("video")) {
+        throw new Error("the reel resolver returned a URL that is not a video");
+      }
+      const bytes = new Uint8Array(await videoRes.arrayBuffer());
       videoName = await upload(bytes, "reel.mp4", "video/mp4");
     }
 
