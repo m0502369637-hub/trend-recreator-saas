@@ -1,8 +1,8 @@
 {
-  "name": "my-saas-boilerplate",
+  "name": "trend-recreator-saas",
   "private": true,
   "version": "1.0.0",
-  "description": "Convex backend template for monetised Telegram SaaS bots: one service per repo, Stars payments, async job queue.",
+  "description": "Trend Recreator Telegram SaaS on Convex: photo + Instagram reel link → Seedance viral character swap on Comfy Cloud.",
   "type": "module",
   "engines": {
     "node": ">=20"

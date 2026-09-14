@@ -1,16 +1,10 @@
 import type { Service } from "./types";
+import { trendRecreate } from "./trend_recreate/index";
 
-// lib/services/registry.ts — the ONE list of services this bot offers.
-//
-// DELIBERATELY EMPTY in the base repo: this boilerplate ships no services.
-// Each SaaS repo adds its own service folder and registers it here, e.g.:
-//
-//   import { myService } from "./my_service/index";
-//   export const SERVICES: Record<string, Service> = { my_service: myService };
-//
-// The base repo must stay free of service accumulation — see services/README.md.
-
-export const SERVICES: Record<string, Service> = {};
+// lib/services/registry.ts — the ONE service this bot offers.
+export const SERVICES: Record<string, Service> = {
+  trend_recreate: trendRecreate,
+};
 
 export function getService(name: string): Service | null {
   return SERVICES[name] ?? null;

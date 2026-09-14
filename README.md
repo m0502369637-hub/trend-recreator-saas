@@ -1,115 +1,84 @@
-# my-saas-boilerplate
+# trend-recreator-saas
 
-A **clone-and-reuse skeleton for monetised Telegram SaaS bots on Convex**:
-classic Bot API webhook, an internal Stars wallet with Telegram invoices and
-automatic refunds, and a fully async, refund-safe job queue built on Convex
-scheduled functions.
+**Photo + Instagram reel link → a video of *you* in the trend**, a monetised
+Telegram bot on Convex + Comfy Cloud. The pipeline is the proven "viral
+character swap": Gemini analyzes the reel scene-by-scene, GPT Image 2 puts
+the customer into the reel's first frame, and Seedance 2.0 regenerates the
+video (9:16, up to 12 s, audio) with the customer as the subject.
 
-**The base repo ships NO services and NO providers.** It is pure plumbing
-with two extension points — a service contract and a provider adapter
-contract. Each real SaaS clones this repo into its own and adds one service +
-one provider (see `services/README.md`).
+Derived from [`my-saas-boilerplate`](https://github.com/m0502369637-hub/my-saas-boilerplate)
+(wired as the `upstream` remote — pull plumbing updates from it).
 
-## What's inside
-
-- **`convex/http.ts`** — the `/telegram` webhook (secret-token verified) and `/healthz`.
-- **`convex/updates.ts`** — the bot brain: `/start` `/balance` `/jobs` `/help`,
-  photo (single + album) and prompt-command routing, Stars payments,
-  check/cancel/buy callbacks, `update_id` idempotency.
-- **`convex/jobs.ts`** — the job state machine (`queued → submitted →
-  processing → complete | failed | timed_out | cancelled`). Mutations only;
-  every terminal transition refunds in the same transaction.
-- **`convex/jobs_actions.ts`** — submit/poll/cancel/deliver orchestration.
-  It resolves providers through `lib/providers/registry.ts` and knows nothing
-  about any specific provider.
-- **`convex/lib/services/`** — the service contract + registry (empty here).
-- **`convex/lib/providers/`** — the provider contract + registry (empty here).
-- **`convex/crons.ts`** — minute-level sweep (timeouts + lost polls) and pruning.
-
-## Architecture
+## How a generation flows
 
 ```
-Telegram ──webhook──▶ https://<deployment>.convex.site/telegram
-                          │ secret-token check → updates.processUpdate
-                          │   trigger (photo/prompt) → jobs.createJob (debit SERVICE_COST)
-                          │                              → jobs_actions.submitJob
-                          │   successful_payment → credit wallet
-                          │   🔄 check / ❌ cancel → pollJob / cancelJob
+Telegram ──webhook──▶ Convex /telegram
+                          │ user sends PHOTO with the reel link as caption
+                          │ jobs.createJob (debit SERVICE_COST)
+                          │ jobs_actions.submitJob → comfy_cloud provider:
+                          │   1. photo → POST /api/upload/image
+                          │   2. reel link → COMFY_REEL_RESOLVER (IG downloader) → mp4 → upload
+                          │   3. COMFY_WORKFLOW (env) with __IMAGE__/__VIDEO__ substituted
+                          │   4. POST /api/prompt → { prompt_id }
                           ▼
-        YOUR provider ◀──submit/poll── jobs_actions (via providers/registry)
-                                  │ scheduler chain + cron sweep
-                                  ▼
-        result → beginDelivery → send media → completeJob (or fail + refund)
-```
-
-## Quickstart (empty bot)
-
-Prereqs: Node ≥ 20, a Telegram bot from @BotFather (Serverless **off**), a
-[Convex account](https://dashboard.convex.dev).
-
-```bash
-npm install
-npx convex dev                        # login + create the Convex project
-npx convex env set BOT_TOKEN '123456:ABC…'
-npx convex env set WEBHOOK_SECRET "$(openssl rand -hex 16)"
-npx convex env set SERVICE_COST '100' # Stars per generation — change anytime, no redeploy
-npm run deploy                        # npx convex deploy
-cp .env.example .env.local            # fill BOT_TOKEN + WEBHOOK_SECRET
-WEBHOOK_URL=https://<deployment>.convex.site npm run webhook:set
-```
-
-Out of the box the bot answers `/start`, `/balance`, `/jobs`, `/help` and
-says "no service configured" — it has no service yet. Add one per
-`services/README.md`.
-
-### Local development
-
-```bash
-npx convex dev          # terminal 1 — local backend
-npm run dev:poll       # terminal 2 — long-poll updates into 127.0.0.1:3210
+        Comfy Cloud: Gemini analysis → GPT Image 2 frame swap → Seedance 2.0 (9:16, 12s)
+                          │ scheduler chain + cron sweep poll GET /history/<id>
+                          ▼
+        video out → download (Bearer) → sendVideo to the user → complete (or refund on failure)
 ```
 
 ## Environment variables
 
-Declared in `convex/convex.config.ts` (deploy-time validated).
-
 | Name | Required | Purpose |
 | --- | --- | --- |
 | `BOT_TOKEN` | ✅ | Classic Bot API token |
-| `WEBHOOK_SECRET` | ✅ | `setWebhook` secret_token; verified on every delivery |
-| `SERVICE_COST` | ✅ | Price per generation in Stars (positive integer) — **the only place pricing lives**; `npx convex env set SERVICE_COST '120'`, no redeploy |
+| `WEBHOOK_SECRET` | ✅ | `setWebhook` secret_token |
+| `SERVICE_COST` | ✅ | Stars per generation — change anytime, no redeploy |
+| `COMFY_API_KEY` | run-time | Comfy Cloud API key (**use your production key at launch**) |
+| `COMFY_API_BASE` | optional | Defaults to `https://cloud.comfy.org` |
+| `COMFY_WORKFLOW` | run-time | API-format workflow JSON (≤ 8 KB env limit) with `__IMAGE__` / `__VIDEO__` placeholders — the graph lives HERE, never in the repo |
+| `COMFY_REEL_RESOLVER` | optional | URL template (with `{url}`) of a reel-downloader API — instagram.com blocks server fetches, so page links need this |
 
-A SaaS repo adds its provider's secrets to its own `convex.config.ts`.
+## Deploy
 
-## Money
+```bash
+npm install
+npx convex dev                        # login + create the Convex project
+npx convex env set BOT_TOKEN '…'
+npx convex env set WEBHOOK_SECRET "$(openssl rand -hex 16)"
+npx convex env set SERVICE_COST '100'
+npx convex env set COMFY_API_KEY 'comfyui-…'
+npx convex env set COMFY_WORKFLOW '{"18":{"class_type":"LoadVideo",…} …}'   # the API graph
+npx convex env set COMFY_REEL_RESOLVER 'https://your-downloader.example/?url={url}'
+npm run deploy
+cp .env.example .env.local
+WEBHOOK_URL=https://<deployment>.convex.site npm run webhook:set
+```
 
-- Users buy Stars via a real Telegram invoice (`XTR`); the payment credits the
-  internal wallet (`users.balance`) from Telegram's trusted `total_amount`.
-- A generation **debits** the wallet and writes a `payments` row in the same
-  transaction that creates the job; the charged price is stamped on the job.
-- Every `failed` / `timed_out` / `cancelled` job **refunds** in the same
-  transaction that flips the status. Convex serializes mutations, so double
-  refunds and double delivery are structurally impossible.
-- Each `update_id` is claimed exactly once before any money moves.
+Then: send the bot **a photo with the Instagram reel link in the caption**.
 
-## Jobs
+## Local end-to-end test (no bot, no Convex deploy)
 
-`queued → submitted → processing → complete | failed | timed_out | cancelled`,
-owned exclusively by `convex/jobs.ts`. Triggers start `queued` jobs;
-`submitJob` resolves photos + submits via the registered provider and —
-atomically — schedules the first poll; `pollJob` re-schedules itself and
-times out past `maxJobAgeMs`; completion flows through the exactly-once
-`beginDelivery` lock; a cron sweep is the safety net.
+```bash
+COMFY_API_KEY=… COMFY_WORKFLOW_FILE=/path/to/api-workflow.json \
+node scripts/test-flow.mjs --photo /path/photo.jpg --reel /path/reel.mp4
+```
 
-## Adding a service
+This mirrors the provider exactly: upload both files → `/api/prompt` →
+poll `/history` → download the output video.
 
-**Never add a service to this repo.** Clone it into a new repository, add your
-service folder + provider adapter, register both, deploy — full recipe in
-[`services/README.md`](services/README.md).
+## Money model
 
-## Limits worth knowing
+- Telegram Stars invoice (`XTR`) → internal wallet; generation debits
+  `SERVICE_COST` in the same transaction that creates the job.
+- Failed / timed-out / cancelled → refunded in the same transaction that flips
+  the status; every movement writes a `payments` row.
+- Update idempotency via `processed_updates` (at-least-once webhook delivery).
 
-- Bot API media uploads cap at 50 MB per file — over-sized provider outputs
-  fail delivery and refund automatically.
-- HTTP action request/response bodies cap at 20 MB (updates are tiny).
-- Callback payloads ≤ 64 bytes (`check:<convex-id>` fits).
+## Notes
+
+- Comfy Cloud generation needs an active subscription; this pipeline spends
+  credits on Gemini + GPT Image 2 + Seedance per run — price `SERVICE_COST`
+  accordingly.
+- Instagram's ToS: scraping/downloading reels is a gray area — use a licensed
+  downloader API and your own compliance judgment.

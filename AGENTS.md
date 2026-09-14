@@ -7,21 +7,23 @@ over any assumption in this file.
 
 ## What this project is
 
-A monetised Telegram SaaS bot skeleton on **Convex**: classic Bot API webhook
-→ Convex HTTP action → Convex DB / scheduled functions / cron → provider →
-media back to the user. The base repo ships **NO services and NO providers**
-— it is pure plumbing with two extension points: the service contract
-(`lib/services/`) and the provider adapter contract (`lib/providers/`). Each
-real SaaS is a separate repository cloned from this one (see
-`services/README.md`). Pricing lives only in the `SERVICE_COST` env var.
+A single-service monetised Telegram SaaS bot on **Convex + Comfy Cloud**,
+derived from `my-saas-boilerplate` (wired as the `upstream` remote — pull
+plumbing updates from it). The service: a customer sends a PHOTO with an
+Instagram reel link as the caption → `trend_recreate` builds a payload →
+the `comfy_cloud` provider uploads photo + reel, injects them into the
+deploy-time workflow (COMFY_WORKFLOW env var, `__IMAGE__` / `__VIDEO__`
+placeholders), submits to Comfy Cloud (Gemini analysis → GPT Image 2 frame
+swap → Seedance 2.0, 9:16, 12 s), and delivers the recreated video.
+Pricing lives only in the `SERVICE_COST` env var.
 
 ## Layout
 
 | Path | Role |
 | --- | --- |
 | `convex/**` | Deployed Convex code (queries, mutations, actions, http, crons, schema). |
-| `convex/lib/services/types.ts` + `registry.ts` | Service contract + EMPTY registry. A SaaS repo adds one service folder and registers it. |
-| `convex/lib/providers/types.ts` + `registry.ts` | Provider adapter contract + EMPTY registry. A SaaS repo implements its provider(s) and registers them. |
+| `convex/lib/services/types.ts` + `registry.ts` | Service contract + this repo's one service (`trend_recreate`). |
+| `convex/lib/providers/types.ts` + `registry.ts` | Provider contract + this repo's one provider (`comfy_cloud`). |
 | `convex/_generated/` | Generated types — **committed** (code won't typecheck without it). Regenerate with `npx convex codegen --system-udfs --init` after schema/env changes; `npx convex dev`/`deploy` regenerate too. |
 | `scripts/*.ts` | Local-only tooling: `dev-poll.ts` (long polling in dev), `set-webhook.ts`. |
 | everything else | Docs, `package.json`, `.env.example`. |
@@ -38,11 +40,14 @@ real SaaS is a separate repository cloned from this one (see
    by other actions.
 3. **`env` only, never `process.env` for your own vars.** Env vars are
    declared in `convex/convex.config.ts` and read via the typed `env` import
-   from `_generated/server`. The base declares `BOT_TOKEN`, `WEBHOOK_SECRET`,
-   `SERVICE_COST`; a SaaS repo adds its provider's secrets to its own copy.
-4. **No provider code in this repo.** The base must stay provider-free: no
-   SDKs, no API keys, no provider-specific endpoints. Providers live in SaaS
-   repos as adapters implementing `lib/providers/types.ts#Provider`.
+   from `_generated/server`. This repo adds `COMFY_API_KEY`, `COMFY_API_BASE`,
+   `COMFY_WORKFLOW` (the API-format workflow JSON, ≤ 8 KB env value limit,
+   `__IMAGE__` / `__VIDEO__` placeholders — never commit the graph to git),
+   and `COMFY_REEL_RESOLVER` (Instagram reel downloader template with
+   `{url}`).
+4. **Provider code lives in SaaS repos only.** The BASE repo stays
+   provider-free; this repo's provider (`lib/providers/comfy_cloud.ts`) must
+   implement the `Provider` interface and never leak its API key into git.
 5. **No foreign keys, no SQL.** Relations are plain fields + indexes; integrity
    is enforced in code. Mutations are serializable transactions — a
    read-check-write inside one mutation is race-free. Never read-modify-write
