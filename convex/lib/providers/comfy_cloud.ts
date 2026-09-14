@@ -151,35 +151,40 @@ export const comfyCloudProvider: Provider = {
     if (!data?.prompt_id) throw new Error(`comfy cloud submit failed: ${data?.error ?? "no prompt_id"}`);
     return {
       providerJobId: data.prompt_id,
-      providerStatusUrl: `${baseUrl()}/history/${data.prompt_id}`,
+      // Status via the cloud's v2 jobs API (the classic /history path is
+      // disabled on Comfy Cloud).
+      providerStatusUrl: `${baseUrl()}/api/v2/jobs/${data.prompt_id}`,
     };
   },
 
   async getJobStatus(job: JobRow): Promise<JobPollResult> {
-    const res = await fetch(`${baseUrl()}/history/${job.providerJobId}`, { headers: authHeaders() });
-    if (!res.ok) throw new Error(`comfy cloud history failed: HTTP ${res.status}`);
-    const history = (await res.json()) as Record<string, any>;
-    const entry = history?.[job.providerJobId ?? ""];
-    if (!entry) return { status: "processing", failed: false }; // {} while queued/running
+    const res = await fetch(`${baseUrl()}/api/v2/jobs/${job.providerJobId}`, { headers: authHeaders() });
+    if (!res.ok) throw new Error(`comfy cloud job status failed: HTTP ${res.status}`);
+    const data = (await res.json()) as {
+      completed_at?: string;
+      error?: { node_id?: string; message?: string } | null;
+      outputs?: Array<{ url?: string; name?: string; type?: string }>;
+    };
 
-    if (entry.status?.status_str === "error") {
-      const messages = ((entry.status?.messages ?? []) as unknown[]).flat().map((m) => JSON.stringify(m)).join("; ").slice(0, 300);
-      return { status: "complete", failed: true, error: `Comfy Cloud error: ${messages || "unknown"}` };
-    }
-
-    for (const out of Object.values(entry.outputs ?? {}) as any[]) {
-      const file = out?.videos?.[0] ?? out?.gifs?.[0] ?? out?.images?.[0];
-      if (!file?.filename) continue;
-      const kind: "video" | "image" = out?.images?.[0]?.filename === file.filename && !out?.videos?.length ? "image" : "video";
-      const sub = file.subfolder ? `&subfolder=${encodeURIComponent(file.subfolder)}` : "";
-      const type = file.type ? `&type=${encodeURIComponent(file.type)}` : "&type=output";
+    if (data.error) {
       return {
         status: "complete",
-        failed: false,
-        output: { url: `${baseUrl()}/view?filename=${encodeURIComponent(file.filename)}${sub}${type}`, kind, requiresDownload: true },
+        failed: true,
+        error: `Comfy Cloud node ${data.error.node_id ?? "?"} failed: ${data.error.message ?? "unknown"}`.slice(0, 300),
       };
     }
-    return { status: "processing", failed: false }; // finished but no output yet — keep polling
+    if (!data.completed_at) return { status: "processing", failed: false }; // still queued/running
+
+    const out = (data.outputs ?? []).find((o) => o?.url && (o.type === "video" || /\.(mp4|webm|mov)$/i.test(o.name ?? "")));
+    const img = (data.outputs ?? []).find((o) => o?.url && !/\.(mp4|webm|mov)$/i.test(o.name ?? ""));
+    const chosen = out ?? img;
+    if (!chosen?.url) return { status: "complete", failed: true, error: "Comfy Cloud job finished with no output" };
+    const kind: "video" | "image" = out ? "video" : "image";
+    return {
+      status: "complete",
+      failed: false,
+      output: { url: chosen.url, kind, requiresDownload: true },
+    };
   },
 
   async cancel(job: JobRow): Promise<{ alreadyCompleted: boolean }> {
